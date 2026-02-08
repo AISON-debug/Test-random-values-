@@ -35,6 +35,7 @@ RMSE_WEIGHTS: Dict[str, float] = {
 }
 MAX_OPTIMISATION_ROUNDS = 10
 NEGATIVE_TOLERANCE = 1e-9
+RESIDUAL_EPS = 1e-9
 
 
 @dataclass
@@ -206,6 +207,65 @@ def _normalise_targets(raw: Mapping[str, float]) -> Dict[str, float]:
     return result
 
 
+def _clamp_fraction(value: float) -> float:
+    if not math.isfinite(value):
+        return 0.0
+    return max(0.0, min(1.0, float(value)))
+
+
+def _positive_residual_indices(residuals: Mapping[str, float]) -> List[int]:
+    return [
+        pos
+        for pos, key in enumerate(NUTRIENT_VECTOR_KEYS)
+        if residuals.get(key, 0.0) > RESIDUAL_EPS
+    ]
+
+
+def _estimate_alpha(
+    nutrient_indices: Sequence[int],
+    active_indices: Sequence[int],
+    residuals: Mapping[str, float],
+    per_gram_map: Mapping[int, np.ndarray],
+    capacities: Mapping[int, float],
+    additions: Mapping[int, float],
+    requested_fraction: float,
+) -> float:
+    alpha_candidates: List[float] = []
+    for nutrient_index in nutrient_indices:
+        key = NUTRIENT_VECTOR_KEYS[nutrient_index]
+        residual_value = residuals.get(key, 0.0)
+        if residual_value <= RESIDUAL_EPS:
+            continue
+
+        total_portion = 0.0
+        for idx in active_indices:
+            available = max(0.0, capacities.get(idx, 0.0) - additions.get(idx, 0.0))
+            if available <= RESIDUAL_EPS:
+                continue
+
+            per_nutrient = float(per_gram_map[idx][nutrient_index])
+            if per_nutrient <= 0.0:
+                continue
+
+            portion_value = per_nutrient * available
+            if portion_value <= 0.0:
+                continue
+
+            total_portion += portion_value
+
+        if total_portion > 0.0:
+            alpha_candidates.append(total_portion / residual_value)
+
+    if not alpha_candidates:
+        return 0.0
+
+    computed = max(alpha_candidates)
+    requested = _clamp_fraction(requested_fraction)
+    if requested > 0.0:
+        computed = max(computed, requested)
+    return _clamp_fraction(computed)
+
+
 def _prepare_product(entry: Mapping[str, object], product_db: Mapping[str, Dict[str, float]]) -> OptimizationProduct:
     if not isinstance(entry, Mapping):
         raise ValueError('Некорректные данные продукта.')
@@ -371,9 +431,25 @@ def _run_iterative_optimisation(
         if not active:
             break
 
+        nutrient_indices = _positive_residual_indices(residual_vec)
+        if not nutrient_indices:
+            break
+
+        alpha = _estimate_alpha(
+            nutrient_indices,
+            active,
+            residual_vec,
+            per_gram_map,
+            capacities,
+            additions,
+            residual_fraction,
+        )
+        if alpha <= 0.0:
+            break
+
         per_gram_matrix = np.stack([per_gram_map[idx] for idx in active])
         target_scaled = np.array(
-            [residual_vec[key] * residual_fraction for key in NUTRIENT_VECTOR_KEYS],
+            [residual_vec[key] * alpha for key in NUTRIENT_VECTOR_KEYS],
             dtype=float,
         )
         weighted_matrix = np.nan_to_num(per_gram_matrix * weight_vector, nan=0.0, posinf=0.0, neginf=0.0)

@@ -194,12 +194,58 @@
             background: #fff;
             color: #111;
         }
-        #optimization-heatmap-wrapper {
+        #residual-distribution-wrapper {
             margin-top: 16px;
         }
-        #optimization-heatmap {
+        #residual-distribution-chart {
             width: 100%;
             height: 420px;
+        }
+        #residual-research-dialog {
+            border: none;
+            border-radius: 12px;
+            padding: 0;
+            max-width: min(420px, 90vw);
+        }
+        #residual-research-dialog form {
+            margin: 0;
+        }
+        #residual-research-dialog .random-pool-body {
+            padding: 18px 20px 10px;
+            display: grid;
+            gap: 12px;
+            background: #fff;
+        }
+        #residual-research-dialog .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px 16px 16px;
+            background: #f9fafb;
+            border-top: 1px solid #e5e7eb;
+            border-bottom-left-radius: 12px;
+            border-bottom-right-radius: 12px;
+        }
+        #residual-research-dialog .modal-actions button {
+            padding: 8px 16px;
+            border-radius: 10px;
+            border: 1px solid #d1d5db;
+            background: #0ea5e9;
+            color: #fff;
+            cursor: pointer;
+        }
+        #residual-research-dialog .modal-actions button#residual-research-cancel {
+            background: #fff;
+            color: #111;
+        }
+        #residual-research-status {
+            margin-top: 8px;
+            font-size: 14px;
+            color: #374151;
+        }
+        .muted-text {
+            font-size: 13px;
+            color: #6b7280;
         }
     </style>
     <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
@@ -339,6 +385,7 @@
     <div id="random-pool-controls">
         <button type="button" id="configure-random-pool">Настройки генератора случайного пула</button>
         <button type="button" id="generate-random-pool">Сгенерировать случайный пул</button>
+        <button type="button" id="run-residual-research">Исследовать долю остатка</button>
     </div>
     <dialog id="random-pool-dialog">
         <form method="dialog" id="random-pool-form">
@@ -368,6 +415,32 @@
             <div class="modal-actions">
                 <button type="button" id="random-pool-confirm">ОК</button>
                 <button type="button" id="random-pool-cancel">Отмена</button>
+            </div>
+        </form>
+    </dialog>
+    <dialog id="residual-research-dialog">
+        <form method="dialog" id="residual-research-form">
+            <div class="random-pool-body">
+                <h3>Исследование доли остатка</h3>
+                <label class="random-pool-field" for="residual-research-iterations">
+                    <span>Количество сценариев (повторов)</span>
+                    <input type="number" id="residual-research-iterations" min="1" step="1" value="30">
+                </label>
+                <label class="random-pool-field" for="residual-research-products-count">
+                    <span>Количество продуктов из базы</span>
+                    <input type="number" id="residual-research-products-count" min="1" step="1" value="12">
+                </label>
+                <label class="random-pool-field" for="residual-research-run-count">
+                    <span>Количество прогонов оптимизации</span>
+                    <input type="number" id="residual-research-run-count" min="1" step="1" value="10">
+                </label>
+                <div class="random-pool-field">
+                    <span class="muted-text">Используется стартовая доля остатка из основного поля «Доля остатка (%)».</span>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" id="residual-research-confirm">Запустить</button>
+                <button type="button" id="residual-research-cancel">Отмена</button>
             </div>
         </form>
     </dialog>
@@ -417,8 +490,10 @@
         <div class="result-row"><strong>Доля остатка (%):</strong> <span id="alpha-result">-</span></div>
         <div class="result-row"><strong>Прогон:</strong> <span id="run-result">-</span></div>
     </div>
-    <div id="optimization-heatmap-wrapper" class="hidden">
-        <div id="optimization-heatmap"></div>
+    <div id="residual-distribution-wrapper" class="hidden">
+        <h3>Распределение лучших RMSE по доле остатка</h3>
+        <div id="residual-distribution-chart"></div>
+        <div id="residual-research-status" class="hidden"></div>
     </div>
     <div id="result-totals" class="hidden">
         <h3>Сравнение целевых и расчётных нутриентов</h3>
@@ -471,6 +546,17 @@
                 ['Клетчатка нерастворимая', 'insoluble'],
                 ['ККал', 'calories']
             ]);
+            const SEX_ADD = {
+                'Мужской': 1,
+                'Женский': -161
+            };
+            const ACTIVITY = [
+                ['Минимальный (сидячий образ жизни)', 1.2],
+                ['Низкий (легкие тренировки 1–3 раза в неделю)', 1.375],
+                ['Умеренный (тренировки 3–5 раз в неделю)', 1.55],
+                ['Высокий (интенсивные тренировки 6–7 раз в неделю)', 1.725],
+                ['Экстремальный (профессиональные атлеты, тяжелый физический труд)', 1.9]
+            ];
             const API_ENDPOINT = 'api/optimize';
             const DEFAULT_RANDOM_POOL_CONFIG = {
                 maxProducts: 8,
@@ -479,12 +565,19 @@
                 maxPortionsMin: 1,
                 maxPortionsMax: 5
             };
+            const DEFAULT_RESIDUAL_RESEARCH_CONFIG = {
+                iterations: 30,
+                productsCount: 12,
+                runCount: 10
+            };
 
             const state = {
                 products: {},
                 optimizationList: new Set(),
                 currentTargets: null,
-                randomPoolConfig: { ...DEFAULT_RANDOM_POOL_CONFIG }
+                randomPoolConfig: { ...DEFAULT_RANDOM_POOL_CONFIG },
+                residualResearchConfig: { ...DEFAULT_RESIDUAL_RESEARCH_CONFIG },
+                residualDistribution: null
             };
 
             function formatNumber(value, fractionDigits = 2) {
@@ -526,6 +619,61 @@
                 return array;
             }
 
+            function getRandomFloat(min, max, precision = 2) {
+                const low = Number(min);
+                const high = Number(max);
+                if (!Number.isFinite(low) || !Number.isFinite(high)) {
+                    return 0;
+                }
+                const value = Math.random() * (high - low) + low;
+                const factor = 10 ** precision;
+                return Math.round(value * factor) / factor;
+            }
+
+            function calcOSO(weightKg, heightCm, ageYears, sex, activityLabel) {
+                const sexAdd = SEX_ADD[sex] ?? -161;
+                const activityRow = ACTIVITY.find(([label]) => label === activityLabel);
+                const activityMultiplier = activityRow ? activityRow[1] : 1;
+                const base = (10 * weightKg) + (6.25 * heightCm) - (5 * ageYears) + sexAdd;
+                return base * activityMultiplier;
+            }
+
+            function calculateTargetsFromOSO(oso, percentages, fiberTotal, fiberRatio) {
+                const pProt = Number(percentages.protein) / 100;
+                const pSat = Number(percentages.sat) / 100;
+                const pUns = Number(percentages.unsat) / 100;
+                const pSim = Number(percentages.simple) / 100;
+
+                const gProt = Math.round((oso * pProt) / 4);
+                const gSat = Math.round((oso * pSat) / 9);
+                const gUns = Math.round((oso * pUns) / 9);
+                const gSim = Math.round((oso * pSim) / 4);
+
+                const fibTotal = Math.round(fiberTotal);
+                const ratio = Number(fiberRatio);
+                const gFibSol = Math.round(fibTotal / (1 + ratio));
+                const gFibIns = Math.round(fibTotal - gFibSol);
+
+                const kcalUsed = (gProt * 4) + (gSat * 9) + (gUns * 9) + (gSim * 4) + ((gFibSol + gFibIns) * 1.5);
+                let gComplex = Math.round((oso - kcalUsed) / 4);
+                if (gComplex < 0) {
+                    gComplex = 0;
+                }
+                const kcalFinal = (gProt * 4) + (gSat * 9) + (gUns * 9) + (gSim * 4)
+                    + (gComplex * 4) + ((gFibSol + gFibIns) * 1.5);
+
+                return {
+                    proteins: gProt,
+                    saturated: gSat,
+                    unsaturated: gUns,
+                    simple: gSim,
+                    complex: gComplex,
+                    soluble: gFibSol,
+                    insoluble: gFibIns,
+                    calories: Math.round(kcalFinal * 10) / 10
+                };
+            }
+
             const dbTable = document.getElementById('db');
             const dbBody = dbTable ? dbTable.querySelector('tbody') : null;
             const poolTable = document.getElementById('pool');
@@ -539,8 +687,9 @@
             const rmseResult = document.getElementById('rmse-result');
             const alphaResult = document.getElementById('alpha-result');
             const runResult = document.getElementById('run-result');
-            const optimizationHeatmapWrapper = document.getElementById('optimization-heatmap-wrapper');
-            const optimizationHeatmap = document.getElementById('optimization-heatmap');
+            const residualDistributionWrapper = document.getElementById('residual-distribution-wrapper');
+            const residualDistributionChart = document.getElementById('residual-distribution-chart');
+            const residualResearchStatus = document.getElementById('residual-research-status');
             const resultTotalsSection = document.getElementById('result-totals');
             const resultTotalsBody = document.getElementById('result-totals-body');
             const bestResultSection = document.getElementById('best-result');
@@ -562,6 +711,13 @@
             const randomStepMaxInput = document.getElementById('random-step-max');
             const randomMaxPortionsMinInput = document.getElementById('random-max-portions-min');
             const randomMaxPortionsMaxInput = document.getElementById('random-max-portions-max');
+            const residualResearchButton = document.getElementById('run-residual-research');
+            const residualResearchDialog = document.getElementById('residual-research-dialog');
+            const residualResearchConfirmButton = document.getElementById('residual-research-confirm');
+            const residualResearchCancelButton = document.getElementById('residual-research-cancel');
+            const residualResearchIterationsInput = document.getElementById('residual-research-iterations');
+            const residualResearchProductsInput = document.getElementById('residual-research-products-count');
+            const residualResearchRunCountInput = document.getElementById('residual-research-run-count');
 
             function populateRandomPoolInputs(config) {
                 const source = { ...DEFAULT_RANDOM_POOL_CONFIG, ...(config || {}) };
@@ -632,6 +788,46 @@
                 return config;
             }
 
+            function populateResidualResearchInputs(config) {
+                const source = { ...DEFAULT_RESIDUAL_RESEARCH_CONFIG, ...(config || {}) };
+                if (residualResearchIterationsInput) {
+                    residualResearchIterationsInput.value = Number.isInteger(source.iterations)
+                        ? source.iterations.toString()
+                        : DEFAULT_RESIDUAL_RESEARCH_CONFIG.iterations.toString();
+                }
+                if (residualResearchProductsInput) {
+                    residualResearchProductsInput.value = Number.isInteger(source.productsCount)
+                        ? source.productsCount.toString()
+                        : DEFAULT_RESIDUAL_RESEARCH_CONFIG.productsCount.toString();
+                }
+                if (residualResearchRunCountInput) {
+                    residualResearchRunCountInput.value = Number.isInteger(source.runCount)
+                        ? source.runCount.toString()
+                        : DEFAULT_RESIDUAL_RESEARCH_CONFIG.runCount.toString();
+                }
+            }
+
+            function readResidualResearchConfigFromInputs() {
+                const config = {
+                    iterations: parseInt(residualResearchIterationsInput && residualResearchIterationsInput.value, 10),
+                    productsCount: parseInt(residualResearchProductsInput && residualResearchProductsInput.value, 10),
+                    runCount: parseInt(residualResearchRunCountInput && residualResearchRunCountInput.value, 10)
+                };
+                if (!Number.isInteger(config.iterations) || config.iterations <= 0) {
+                    alert('Количество сценариев должно быть положительным целым числом.');
+                    return null;
+                }
+                if (!Number.isInteger(config.productsCount) || config.productsCount <= 0) {
+                    alert('Количество продуктов должно быть положительным целым числом.');
+                    return null;
+                }
+                if (!Number.isInteger(config.runCount) || config.runCount <= 0) {
+                    alert('Количество прогонов оптимизации должно быть положительным целым числом.');
+                    return null;
+                }
+                return config;
+            }
+
             let calculatorSummaryBody = null;
             let updateCalculatorSummary = null;
 
@@ -664,7 +860,7 @@
                 if (bestResultBody) {
                     bestResultBody.innerHTML = '';
                 }
-                clearOptimizationHeatmap();
+                clearResidualDistribution();
             }
 
             function renderTargetSummary(targets) {
@@ -706,296 +902,78 @@
                 resultTotalsSection.classList.remove('hidden');
             }
 
-            function clearOptimizationHeatmap() {
-                if (!optimizationHeatmapWrapper || !optimizationHeatmap) {
+            function clearResidualDistribution() {
+                if (!residualDistributionWrapper || !residualDistributionChart) {
                     return;
                 }
-                optimizationHeatmapWrapper.classList.add('hidden');
+                residualDistributionWrapper.classList.add('hidden');
                 if (window.Plotly && typeof window.Plotly.purge === 'function') {
-                    window.Plotly.purge(optimizationHeatmap);
+                    window.Plotly.purge(residualDistributionChart);
                 } else {
-                    optimizationHeatmap.innerHTML = '';
+                    residualDistributionChart.innerHTML = '';
+                }
+                if (residualResearchStatus) {
+                    residualResearchStatus.classList.add('hidden');
+                    residualResearchStatus.textContent = '';
                 }
             }
 
-            function renderOptimizationHeatmap(historyEntries) {
-                if (!optimizationHeatmapWrapper || !optimizationHeatmap) {
+            function buildDistributionFromHistory(historyEntries) {
+                if (!Array.isArray(historyEntries) || !historyEntries.length) {
+                    return null;
+                }
+                const validEntries = historyEntries
+                    .map(entry => ({
+                        share: Number(entry && entry.residual_share),
+                        rmse: Number(entry && entry.rmse)
+                    }))
+                    .filter(entry => Number.isFinite(entry.share) && Number.isFinite(entry.rmse));
+                if (!validEntries.length) {
+                    return null;
+                }
+                const bestEntry = validEntries.reduce((best, entry) => (entry.rmse < best.rmse ? entry : best), validEntries[0]);
+                const distribution = new Map();
+                distribution.set(bestEntry.share.toFixed(4), 1);
+                return distribution;
+            }
+
+            function renderResidualDistribution(distribution, statusText = '') {
+                if (!residualDistributionWrapper || !residualDistributionChart) {
                     return;
                 }
-                if (!Array.isArray(historyEntries) || !historyEntries.length || !window.Plotly) {
-                    clearOptimizationHeatmap();
+                if (!distribution || !distribution.size || !window.Plotly) {
+                    clearResidualDistribution();
                     return;
                 }
+                const entries = Array.from(distribution.entries())
+                    .map(([shareKey, count]) => ({
+                        share: Number(shareKey),
+                        count: Number(count) || 0
+                    }))
+                    .filter(entry => Number.isFinite(entry.share));
 
-                const shareMap = new Map();
-                const runMap = new Map();
-                const shareValues = [];
-                const runValues = [];
-
-                historyEntries.forEach(entry => {
-                    const share = Number(entry && entry.residual_share);
-                    const run = Number(entry && entry.run);
-                    const rmseValue = Number(entry && entry.rmse);
-                    if (!Number.isFinite(share) || !Number.isFinite(run) || !Number.isFinite(rmseValue)) {
-                        return;
-                    }
-                    const shareKey = share.toFixed(6);
-                    if (!shareMap.has(shareKey)) {
-                        shareMap.set(shareKey, shareValues.length);
-                        shareValues.push(share);
-                    }
-                    const runKey = run.toString();
-                    if (!runMap.has(runKey)) {
-                        runMap.set(runKey, runValues.length);
-                        runValues.push(run);
-                    }
-                });
-
-                if (!shareValues.length || !runValues.length) {
-                    clearOptimizationHeatmap();
-                    return;
-                }
-
-                shareValues.sort((a, b) => a - b);
-                runValues.sort((a, b) => a - b);
-                shareMap.clear();
-                runMap.clear();
-                shareValues.forEach((value, index) => shareMap.set(value.toFixed(6), index));
-                runValues.forEach((value, index) => runMap.set(value.toString(), index));
-
-                const zMatrix = runValues.map(() => shareValues.map(() => Number.NaN));
-                let hasFinite = false;
-                let minValue = Number.POSITIVE_INFINITY;
-                let maxValue = Number.NEGATIVE_INFINITY;
-                let smallestPositive = Number.POSITIVE_INFINITY;
-
-                historyEntries.forEach(entry => {
-                    const share = Number(entry && entry.residual_share);
-                    const run = Number(entry && entry.run);
-                    const rmseValue = Number(entry && entry.rmse);
-                    if (!Number.isFinite(share) || !Number.isFinite(run) || !Number.isFinite(rmseValue)) {
-                        return;
-                    }
-                    const colIndex = shareMap.get(share.toFixed(6));
-                    const rowIndex = runMap.get(run.toString());
-                    if (colIndex === undefined || rowIndex === undefined) {
-                        return;
-                    }
-                    zMatrix[rowIndex][colIndex] = rmseValue;
-                    hasFinite = true;
-                    if (rmseValue < minValue) {
-                        minValue = rmseValue;
-                    }
-                    if (rmseValue > maxValue) {
-                        maxValue = rmseValue;
-                    }
-                    if (rmseValue > 0 && rmseValue < smallestPositive) {
-                        smallestPositive = rmseValue;
-                    }
-                });
-
-                if (!hasFinite || !Number.isFinite(minValue) || !Number.isFinite(maxValue)) {
-                    clearOptimizationHeatmap();
+                if (!entries.length) {
+                    clearResidualDistribution();
                     return;
                 }
 
-                const sharePercents = shareValues.map(value => value * 100);
-                const hasStrictlyPositive = Number.isFinite(smallestPositive) && smallestPositive > 0;
-                const zeroReplacement = hasStrictlyPositive
-                    ? smallestPositive * 0.1
-                    : 1e-6;
-                let adjustedMinValue = Number.POSITIVE_INFINITY;
-                let adjustedMaxValue = Number.NEGATIVE_INFINITY;
-                const adjustedZMatrix = zMatrix.map(row => row.map(value => {
-                    if (!Number.isFinite(value)) {
-                        return Number.NaN;
-                    }
-                    const positiveValue = value > 0 ? value : zeroReplacement;
-                    if (positiveValue < adjustedMinValue) {
-                        adjustedMinValue = positiveValue;
-                    }
-                    if (positiveValue > adjustedMaxValue) {
-                        adjustedMaxValue = positiveValue;
-                    }
-                    return positiveValue;
-                }));
+                entries.sort((a, b) => a.share - b.share);
+                const xValues = entries.map(entry => Math.round(entry.share * 100));
+                const yValues = entries.map(entry => entry.count);
 
-                if (!Number.isFinite(adjustedMinValue) || !Number.isFinite(adjustedMaxValue)) {
-                    clearOptimizationHeatmap();
-                    return;
-                }
-
-                const hoverTextMatrix = zMatrix.map(row => row.map(value => {
-                    if (Number.isFinite(value)) {
-                        return value.toFixed(4);
+                const traces = [
+                    {
+                        x: xValues,
+                        y: yValues,
+                        type: 'bar',
+                        marker: { color: '#0ea5e9' }
                     }
-                    return 'нет данных';
-                }));
-
-                const colorReplacement = hasStrictlyPositive ? smallestPositive : zeroReplacement;
-                let colorMinValue = Number.POSITIVE_INFINITY;
-                let colorMaxValue = Number.NEGATIVE_INFINITY;
-                const surfaceColorMatrix = zMatrix.map(row => row.map(value => {
-                    if (!Number.isFinite(value)) {
-                        return Number.NaN;
-                    }
-                    const positiveValue = value > 0 ? value : colorReplacement;
-                    if (positiveValue < colorMinValue) {
-                        colorMinValue = positiveValue;
-                    }
-                    if (positiveValue > colorMaxValue) {
-                        colorMaxValue = positiveValue;
-                    }
-                    return positiveValue;
-                }));
-
-                if (!Number.isFinite(colorMinValue) || !Number.isFinite(colorMaxValue)) {
-                    clearOptimizationHeatmap();
-                    return;
-                }
-
-                const thermalColorscale = [
-                    [0.0, '#ff0000'],
-                    [0.2, '#ff6600'],
-                    [0.4, '#ffcc00'],
-                    [0.6, '#ccff33'],
-                    [0.8, '#66ccff'],
-                    [1.0, '#0000ff']
                 ];
 
-                const colorRangeWidth = colorMaxValue - colorMinValue;
-                const colorbarConfig = { title: 'RMSE' };
-                let normalizedSurfaceColorMatrix;
-                let colorScaleMin = 0;
-                let colorScaleMax = 1;
-
-                if (colorRangeWidth > 0 && Number.isFinite(colorRangeWidth)) {
-                    normalizedSurfaceColorMatrix = surfaceColorMatrix.map(row => row.map(value => {
-                        if (!Number.isFinite(value)) {
-                            return Number.NaN;
-                        }
-                        return (value - colorMinValue) / colorRangeWidth;
-                    }));
-                    const tickCount = 5;
-                    const tickvals = [];
-                    const ticktext = [];
-                    for (let index = 0; index < tickCount; index += 1) {
-                        const fraction = tickCount === 1 ? 0 : index / (tickCount - 1);
-                        tickvals.push(fraction);
-                        const tickValue = colorMinValue + fraction * colorRangeWidth;
-                        ticktext.push(formatNumber(tickValue, 4));
-                    }
-                    colorbarConfig.tickvals = tickvals;
-                    colorbarConfig.ticktext = ticktext;
-                } else {
-                    normalizedSurfaceColorMatrix = surfaceColorMatrix.map(row => row.map(value => {
-                        if (!Number.isFinite(value)) {
-                            return Number.NaN;
-                        }
-                        return 0.5;
-                    }));
-                    colorbarConfig.tickvals = [0.5];
-                    colorbarConfig.ticktext = [formatNumber(colorMinValue, 4)];
-                }
-
-                const surfaceTrace = {
-                    type: 'surface',
-                    x: sharePercents,
-                    y: runValues,
-                    z: adjustedZMatrix,
-                    surfacecolor: normalizedSurfaceColorMatrix,
-                    customdata: hoverTextMatrix,
-                    colorscale: thermalColorscale,
-                    cauto: false,
-                    cmin: colorScaleMin,
-                    cmax: colorScaleMax,
-                    showscale: true,
-                    colorbar: colorbarConfig,
-                    hovertemplate: 'Доля остатка: %{x:.2f}%<br>Прогон: %{y}<br>RMSE: %{customdata}<extra></extra>',
-                    name: 'RMSE'
-                };
-
-                let minimalEntry = null;
-                historyEntries.forEach(entry => {
-                    const share = Number(entry && entry.residual_share);
-                    const run = Number(entry && entry.run);
-                    const rmseValue = Number(entry && entry.rmse);
-                    if (!Number.isFinite(share) || !Number.isFinite(run) || !Number.isFinite(rmseValue)) {
-                        return;
-                    }
-                    if (
-                        !minimalEntry
-                        || rmseValue < minimalEntry.rmse - 1e-9
-                        || (
-                            Math.abs(rmseValue - minimalEntry.rmse) <= 1e-9
-                            && (share < minimalEntry.share || (share === minimalEntry.share && run < minimalEntry.run))
-                        )
-                    ) {
-                        minimalEntry = { share, run, rmse: rmseValue };
-                    }
-                });
-
-                const traces = [surfaceTrace];
-                if (minimalEntry) {
-                    const minimalEntryZ = minimalEntry.rmse > 0 ? minimalEntry.rmse : zeroReplacement;
-                    traces.push({
-                        type: 'scatter3d',
-                        mode: 'markers+text',
-                        x: [minimalEntry.share * 100],
-                        y: [minimalEntry.run],
-                        z: [minimalEntryZ],
-                        marker: {
-                            size: 6,
-                            color: '#ff4500',
-                            line: { width: 1, color: '#ffffff' }
-                        },
-                        text: [`${minimalEntry.rmse.toFixed(2)}`],
-                        textposition: 'top center',
-                        name: 'Минимальный RMSE',
-                        customdata: [minimalEntry.rmse],
-                        hovertemplate: 'Минимальный RMSE<br>Доля остатка: %{x:.2f}%<br>Прогон: %{y}<br>RMSE: %{customdata:.4f}<extra></extra>'
-                    });
-                }
-
-                const rmseAxisMin = minValue > 0 ? minValue : (hasStrictlyPositive ? smallestPositive : zeroReplacement);
-                let rmseAxisMax = maxValue > 0 ? maxValue : rmseAxisMin;
-                if (!Number.isFinite(rmseAxisMax) || rmseAxisMax <= 0) {
-                    rmseAxisMax = rmseAxisMin > 0 ? rmseAxisMin : 1;
-                }
-                if (rmseAxisMax <= rmseAxisMin) {
-                    rmseAxisMax = rmseAxisMin * 1.0001;
-                }
-
-                let zAxisRange = null;
-                if (rmseAxisMin > 0 && rmseAxisMax > 0 && Number.isFinite(rmseAxisMin) && Number.isFinite(rmseAxisMax)) {
-                    const lower = Math.log10(rmseAxisMin);
-                    const upper = Math.log10(rmseAxisMax);
-                    if (Number.isFinite(lower) && Number.isFinite(upper)) {
-                        zAxisRange = [lower, upper];
-                    }
-                }
-
-                const zAxisConfig = { title: 'RMSE', type: 'log' };
-                if (zAxisRange) {
-                    zAxisConfig.autorange = false;
-                    zAxisConfig.range = zAxisRange;
-                } else {
-                    zAxisConfig.autorange = true;
-                }
-
                 const layout = {
-                    title: 'Тепловая карта RMSE',
-                    autosize: true,
-                    margin: { l: 0, r: 0, b: 0, t: 40 },
-                    scene: {
-                        xaxis: { title: 'Доля остатка (%)' },
-                        yaxis: { title: 'Прогон' },
-                        zaxis: zAxisConfig,
-                        aspectmode: 'cube',
-                        camera: {
-                            eye: { x: 1.35, y: 1.35, z: 0.9 }
-                        }
-                    }
+                    xaxis: { title: 'Доля остатка (%)' },
+                    yaxis: { title: 'Количество лучших RMSE' },
+                    margin: { t: 20, l: 60, r: 20, b: 60 }
                 };
 
                 const config = {
@@ -1006,8 +984,17 @@
 
                 const plotly = window.Plotly;
                 const method = typeof plotly.react === 'function' ? 'react' : 'newPlot';
-                plotly[method](optimizationHeatmap, traces, layout, config);
-                optimizationHeatmapWrapper.classList.remove('hidden');
+                plotly[method](residualDistributionChart, traces, layout, config);
+                residualDistributionWrapper.classList.remove('hidden');
+                if (residualResearchStatus) {
+                    if (statusText) {
+                        residualResearchStatus.textContent = statusText;
+                        residualResearchStatus.classList.remove('hidden');
+                    } else {
+                        residualResearchStatus.classList.add('hidden');
+                        residualResearchStatus.textContent = '';
+                    }
+                }
             }
 
             function extractTargetsFromSummary(summaryElement) {
@@ -1131,6 +1118,91 @@
                 });
                 const totalCalories = items.reduce((sum, item) => sum + item.calories, 0);
                 return { items, totalCalories };
+            }
+
+            function selectRandomPoolWithTarget(allProducts, config, targetCalories, fixedCount = null) {
+                const maxProducts = Math.min(config.maxProducts, allProducts.length);
+                const needsCalories = Number.isFinite(targetCalories) && targetCalories > 0;
+                const maxAttempts = needsCalories ? 40 : 1;
+                let bestCandidate = null;
+                let selectedNames = [];
+
+                for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+                    const productCount = Number.isInteger(fixedCount)
+                        ? fixedCount
+                        : getRandomInt(1, maxProducts);
+                    const candidateNames = shuffleArray(allProducts).slice(0, productCount);
+                    const candidate = buildRandomPoolCandidate(candidateNames, config);
+                    if (!bestCandidate || candidate.totalCalories > bestCandidate.totalCalories) {
+                        bestCandidate = candidate;
+                        selectedNames = candidateNames;
+                    }
+                    if (!needsCalories || candidate.totalCalories >= targetCalories) {
+                        bestCandidate = candidate;
+                        selectedNames = candidateNames;
+                        break;
+                    }
+                }
+
+                let hasWarning = false;
+                if (needsCalories && (!bestCandidate || bestCandidate.totalCalories < targetCalories)) {
+                    const fallbackNames = shuffleArray(allProducts).slice(0, maxProducts);
+                    const fallbackCandidate = buildRandomPoolCandidate(fallbackNames, config, true);
+                    if (!bestCandidate || fallbackCandidate.totalCalories > bestCandidate.totalCalories) {
+                        bestCandidate = fallbackCandidate;
+                        selectedNames = fallbackNames;
+                    }
+                    if (bestCandidate && bestCandidate.totalCalories < targetCalories) {
+                        hasWarning = true;
+                    }
+                }
+
+                return { selectedNames, candidate: bestCandidate, hasWarning };
+            }
+
+            function buildOptimizationPayload(targets, products, runCount, residualShareFraction, allowZeroWeights) {
+                return {
+                    residual_share: residualShareFraction,
+                    run_count: runCount,
+                    allow_zero_weights: allowZeroWeights,
+                    targets,
+                    products: products.map(item => ({
+                        name: item.name,
+                        step: item.step,
+                        max_weight: item.max_weight,
+                        fix_weight: item.fix_weight,
+                        fixed_weight: item.fixed_weight,
+                        nutrients: {
+                            proteins: item.nutrients.proteins || 0,
+                            saturated: item.nutrients.saturated || 0,
+                            unsaturated: item.nutrients.unsaturated || 0,
+                            simple: item.nutrients.simple || 0,
+                            complex: item.nutrients.complex || 0,
+                            soluble: item.nutrients.soluble || 0,
+                            insoluble: item.nutrients.insoluble || 0,
+                            kcal: item.nutrients.kcal || 0
+                        }
+                    }))
+                };
+            }
+
+            function generateRandomTargets() {
+                const weight = getRandomFloat(20, 300, 1);
+                const height = getRandomFloat(100, 250, 1);
+                const age = getRandomFloat(10, 100, 0);
+                const sexOptions = Object.keys(SEX_ADD);
+                const sex = sexOptions[getRandomInt(0, sexOptions.length - 1)] || 'Мужской';
+                const activity = ACTIVITY[getRandomInt(0, ACTIVITY.length - 1)][0];
+                const oso = calcOSO(weight, height, age, sex, activity);
+                const percentages = {
+                    protein: getRandomInt(20, 35),
+                    sat: getRandomInt(5, 10),
+                    unsat: getRandomInt(12, 25),
+                    simple: getRandomInt(5, 10)
+                };
+                const fiberTotal = getRandomInt(0, 200);
+                const fiberRatio = getRandomFloat(2.0, 3.0, 1);
+                return calculateTargetsFromOSO(oso, percentages, fiberTotal, fiberRatio);
             }
 
             function addToPool(name) {
@@ -1264,6 +1336,87 @@
                 return data;
             }
 
+            async function runResidualResearch(config) {
+                const allProducts = Object.keys(state.products);
+                if (!allProducts.length) {
+                    alert('База продуктов ещё не загружена.');
+                    return;
+                }
+
+                const randomPoolConfig = state.randomPoolConfig;
+                const poolError = validateRandomPoolConfig(randomPoolConfig);
+                if (poolError) {
+                    alert(`${poolError} Откройте настройки генератора случайного пула и сохраните значения.`);
+                    return;
+                }
+
+                if (config.productsCount > allProducts.length) {
+                    alert('Количество продуктов для исследования превышает размер базы.');
+                    return;
+                }
+
+                const baseAlphaPercent = parseFloat(residualInput && residualInput.value);
+                if (!Number.isFinite(baseAlphaPercent) || baseAlphaPercent < 0 || baseAlphaPercent > 100) {
+                    alert('Введите корректное значение для "Доля остатка" в процентах.');
+                    return;
+                }
+
+                const allowZeroWeights = allowZeroWeightsToggle ? !!allowZeroWeightsToggle.checked : true;
+                const alphaFraction = clampFraction(baseAlphaPercent / 100);
+                const distribution = new Map();
+
+                if (residualResearchStatus) {
+                    residualResearchStatus.textContent = 'Подготовка исследования...';
+                    residualResearchStatus.classList.remove('hidden');
+                }
+
+                for (let index = 0; index < config.iterations; index += 1) {
+                    const targets = generateRandomTargets();
+                    const { selectedNames, candidate } = selectRandomPoolWithTarget(
+                        shuffleArray(allProducts),
+                        { ...randomPoolConfig, maxProducts: config.productsCount },
+                        targets.calories,
+                        config.productsCount
+                    );
+                    const products = selectedNames.map(name => {
+                        const candidateItem = candidate ? candidate.items.find(item => item.name === name) : null;
+                        const step = candidateItem ? candidateItem.step : getRandomInt(randomPoolConfig.stepMin, randomPoolConfig.stepMax);
+                        const maxPortions = candidateItem
+                            ? candidateItem.maxPortions
+                            : getRandomInt(randomPoolConfig.maxPortionsMin, randomPoolConfig.maxPortionsMax);
+                        const maxWeight = step * maxPortions;
+                        return {
+                            name,
+                            step,
+                            max_weight: maxWeight,
+                            fix_weight: false,
+                            fixed_weight: 0,
+                            nutrients: state.products[name] || {}
+                        };
+                    });
+                    const payload = buildOptimizationPayload(
+                        targets,
+                        products,
+                        config.runCount,
+                        alphaFraction,
+                        allowZeroWeights
+                    );
+                    const result = await requestOptimization(payload);
+                    const share = Number(result && result.residual_share);
+                    if (Number.isFinite(share)) {
+                        const key = share.toFixed(4);
+                        distribution.set(key, (distribution.get(key) || 0) + 1);
+                    }
+                    if (residualResearchStatus) {
+                        residualResearchStatus.textContent = `Сценарий ${index + 1} из ${config.iterations}...`;
+                        residualResearchStatus.classList.remove('hidden');
+                    }
+                }
+
+                state.residualDistribution = distribution;
+                renderResidualDistribution(distribution, `Готово: ${config.iterations} сценариев.`);
+            }
+
             function displayOptimizationResult(result, requestedAlphaFraction) {
                 if (!result) {
                     resetOptimizationResults();
@@ -1289,7 +1442,8 @@
                 const totalsForResult = result && typeof result.totals === 'object' ? result.totals : null;
                 renderResultTotals(targetsForTotals, totalsForResult);
                 const historyEntries = Array.isArray(result.history) ? result.history : [];
-                renderOptimizationHeatmap(historyEntries);
+                const distribution = buildDistributionFromHistory(historyEntries);
+                renderResidualDistribution(distribution);
                 if (bestResultBody && bestResultSection) {
                     const weights = Array.isArray(result.weights)
                         ? result.weights.filter(item => Number.isFinite(item.weight) && item.weight >= 0)
@@ -1320,18 +1474,6 @@
                 if (!container) {
                     return;
                 }
-                const SEX_ADD = {
-                    'Мужской': 1,
-                    'Женский': -161
-                };
-                const ACTIVITY = [
-                    ['Минимальный (сидячий образ жизни)', 1.2],
-                    ['Низкий (легкие тренировки 1–3 раза в неделю)', 1.375],
-                    ['Умеренный (тренировки 3–5 раз в неделю)', 1.55],
-                    ['Высокий (интенсивные тренировки 6–7 раз в неделю)', 1.725],
-                    ['Экстремальный (профессиональные атлеты, тяжелый физический труд)', 1.9]
-                ];
-
                 const elSex = container.querySelector('#sex');
                 const elAct = container.querySelector('#activity');
                 const elW = container.querySelector('#weight');
@@ -1378,14 +1520,6 @@
                     }
                     const pct = ((value - min) / (max - min)) * 100;
                     range.style.backgroundSize = `${pct}% 100%`;
-                }
-
-                function calcOSO(weightKg, heightCm, ageYears, sex, activityLabel) {
-                    const sexAdd = SEX_ADD[sex] ?? -161;
-                    const activityRow = ACTIVITY.find(([label]) => label === activityLabel);
-                    const activityMultiplier = activityRow ? activityRow[1] : 1;
-                    const base = (10 * weightKg) + (6.25 * heightCm) - (5 * ageYears) + sexAdd;
-                    return base * activityMultiplier;
                 }
 
                 function clampValue(value, min, max) {
@@ -1439,36 +1573,24 @@
                         elOSOExplain.textContent = `((10×${weight}) + (6.25×${height}) − (5×${age}) + ${SEX_ADD[sex] ?? -161}) × ${actMultiplier}`;
                     }
 
-                    const pProt = elpProt ? parseInt(elpProt.value, 10) / 100 : 0.25;
-                    const pSat = elpSat ? parseInt(elpSat.value, 10) / 100 : 0.08;
-                    const pUns = elpUns ? parseInt(elpUns.value, 10) / 100 : 0.18;
-                    const pSim = elpSim ? parseInt(elpSim.value, 10) / 100 : 0.07;
-
-                    const gProt = Math.round((oso * pProt) / 4);
-                    const gSat = Math.round((oso * pSat) / 9);
-                    const gUns = Math.round((oso * pUns) / 9);
-                    const gSim = Math.round((oso * pSim) / 4);
-
+                    const percentages = {
+                        protein: elpProt ? parseInt(elpProt.value, 10) : 25,
+                        sat: elpSat ? parseInt(elpSat.value, 10) : 8,
+                        unsat: elpUns ? parseInt(elpUns.value, 10) : 18,
+                        simple: elpSim ? parseInt(elpSim.value, 10) : 7
+                    };
                     const fibTotal = Math.round(clampValue(readNumber(elFibTotal, 0), 0, 999));
                     const ratio = parseFloat(elFibRatio ? elFibRatio.value : '2.5');
-                    const gFibSol = Math.round(fibTotal / (1 + ratio));
-                    const gFibIns = Math.round(fibTotal - gFibSol);
-
-                    const kcalUsed = (gProt * 4) + (gSat * 9) + (gUns * 9) + (gSim * 4) + ((gFibSol + gFibIns) * 1.5);
-                    let gComplex = Math.round((oso - kcalUsed) / 4);
-                    if (gComplex < 0) {
-                        gComplex = 0;
-                    }
-                    const kcalFinal = (gProt * 4) + (gSat * 9) + (gUns * 9) + (gSim * 4) + (gComplex * 4) + ((gFibSol + gFibIns) * 1.5);
+                    const targets = calculateTargetsFromOSO(oso, percentages, fibTotal, ratio);
                     const rows = [
-                        ['Белки', `${gProt} г`],
-                        ['Жиры насыщенные', `${gSat} г`],
-                        ['Жиры ненасыщенные', `${gUns} г`],
-                        ['Углеводы простые', `${gSim} г`],
-                        ['Углеводы сложные перевариваемые', `${gComplex} г`],
-                        ['Клетчатка растворимая', `${gFibSol} г`],
-                        ['Клетчатка нерастворимая', `${gFibIns} г`],
-                        ['ККал', `${(Math.round(kcalFinal * 10) / 10).toFixed(1)}`]
+                        ['Белки', `${targets.proteins} г`],
+                        ['Жиры насыщенные', `${targets.saturated} г`],
+                        ['Жиры ненасыщенные', `${targets.unsaturated} г`],
+                        ['Углеводы простые', `${targets.simple} г`],
+                        ['Углеводы сложные перевариваемые', `${targets.complex} г`],
+                        ['Клетчатка растворимая', `${targets.soluble} г`],
+                        ['Клетчатка нерастворимая', `${targets.insoluble} г`],
+                        ['ККал', `${targets.calories.toFixed(1)}`]
                     ];
                     calculatorSummaryBody.innerHTML = rows.map(([name, value]) => `<tr><td>${name}</td><td class="right">${value}</td></tr>`).join('');
                 }
@@ -1534,6 +1656,7 @@
                 updateDbVisibility();
 
                 populateRandomPoolInputs(state.randomPoolConfig);
+                populateResidualResearchInputs(state.residualResearchConfig);
 
                 if (randomPoolSettingsButton && randomPoolDialog) {
                     randomPoolSettingsButton.addEventListener('click', () => {
@@ -1568,6 +1691,58 @@
                     });
                 }
 
+                if (residualResearchButton && residualResearchDialog) {
+                    residualResearchButton.addEventListener('click', () => {
+                        populateResidualResearchInputs(state.residualResearchConfig);
+                        residualResearchDialog.showModal();
+                    });
+                }
+
+                if (residualResearchCancelButton && residualResearchDialog) {
+                    residualResearchCancelButton.addEventListener('click', () => {
+                        residualResearchDialog.close();
+                    });
+                }
+
+                if (residualResearchDialog) {
+                    residualResearchDialog.addEventListener('cancel', event => {
+                        event.preventDefault();
+                        residualResearchDialog.close();
+                    });
+                }
+
+                if (residualResearchConfirmButton) {
+                    residualResearchConfirmButton.addEventListener('click', async () => {
+                        const config = readResidualResearchConfigFromInputs();
+                        if (!config) {
+                            return;
+                        }
+                        state.residualResearchConfig = { ...config };
+                        if (residualResearchDialog) {
+                            residualResearchDialog.close();
+                        }
+                        if (residualResearchConfirmButton) {
+                            residualResearchConfirmButton.disabled = true;
+                        }
+                        if (residualResearchButton) {
+                            residualResearchButton.disabled = true;
+                        }
+                        try {
+                            await runResidualResearch(config);
+                        } catch (error) {
+                            console.error(error);
+                            alert(error.message || 'Не удалось выполнить исследование.');
+                        } finally {
+                            if (residualResearchConfirmButton) {
+                                residualResearchConfirmButton.disabled = false;
+                            }
+                            if (residualResearchButton) {
+                                residualResearchButton.disabled = false;
+                            }
+                        }
+                    });
+                }
+
                 if (randomPoolButton) {
                     randomPoolButton.addEventListener('click', () => {
                         const allProducts = Object.keys(state.products);
@@ -1595,36 +1770,13 @@
                         }
 
                         const targetCalories = Number(state.currentTargets && state.currentTargets.calories);
-                        const needsCalories = Number.isFinite(targetCalories) && targetCalories > 0;
-                        const maxAttempts = needsCalories ? 40 : 1;
-                        let bestCandidate = null;
-                        let selectedNames = [];
-
-                        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-                            const productCount = getRandomInt(1, maxProducts);
-                            const candidateNames = shuffleArray(allProducts).slice(0, productCount);
-                            const candidate = buildRandomPoolCandidate(candidateNames, config);
-                            if (!bestCandidate || candidate.totalCalories > bestCandidate.totalCalories) {
-                                bestCandidate = candidate;
-                                selectedNames = candidateNames;
-                            }
-                            if (!needsCalories || candidate.totalCalories >= targetCalories) {
-                                bestCandidate = candidate;
-                                selectedNames = candidateNames;
-                                break;
-                            }
-                        }
-
-                        if (needsCalories && (!bestCandidate || bestCandidate.totalCalories < targetCalories)) {
-                            const fallbackNames = shuffleArray(allProducts).slice(0, maxProducts);
-                            const fallbackCandidate = buildRandomPoolCandidate(fallbackNames, config, true);
-                            if (!bestCandidate || fallbackCandidate.totalCalories > bestCandidate.totalCalories) {
-                                bestCandidate = fallbackCandidate;
-                                selectedNames = fallbackNames;
-                            }
-                            if (bestCandidate && bestCandidate.totalCalories < targetCalories) {
-                                alert('Сумма ккал даже при максимальных настройках пула меньше целевых значений ОСО.');
-                            }
+                        const { selectedNames, candidate: bestCandidate, hasWarning } = selectRandomPoolWithTarget(
+                            allProducts,
+                            config,
+                            targetCalories
+                        );
+                        if (hasWarning) {
+                            alert('Сумма ккал даже при максимальных настройках пула меньше целевых значений ОСО.');
                         }
 
                         clearPool();
@@ -1685,29 +1837,13 @@
                         }
                         const allowZeroWeights = allowZeroWeightsToggle ? !!allowZeroWeightsToggle.checked : true;
                         const alphaFraction = clampFraction(baseAlphaPercent / 100);
-                        const payload = {
-                            residual_share: alphaFraction,
-                            run_count: runCount,
-                            allow_zero_weights: allowZeroWeights,
-                            targets: state.currentTargets,
-                            products: selectedProducts.map(item => ({
-                                name: item.name,
-                                step: item.step,
-                                max_weight: item.max_weight,
-                                fix_weight: item.fix_weight,
-                                fixed_weight: item.fixed_weight,
-                                nutrients: {
-                                    proteins: item.nutrients.proteins || 0,
-                                    saturated: item.nutrients.saturated || 0,
-                                    unsaturated: item.nutrients.unsaturated || 0,
-                                    simple: item.nutrients.simple || 0,
-                                    complex: item.nutrients.complex || 0,
-                                    soluble: item.nutrients.soluble || 0,
-                                    insoluble: item.nutrients.insoluble || 0,
-                                    kcal: item.nutrients.kcal || 0
-                                }
-                            }))
-                        };
+                        const payload = buildOptimizationPayload(
+                            state.currentTargets,
+                            selectedProducts,
+                            runCount,
+                            alphaFraction,
+                            allowZeroWeights
+                        );
 
                         const originalLabel = runOptimizationButton.textContent;
                         runOptimizationButton.disabled = true;
